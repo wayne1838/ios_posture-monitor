@@ -3,44 +3,40 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>AI 姿勢參數調優工具</title>
+    <title>AI 骨架視覺化調優工具</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection"></script>
     
     <style>
-        :root { --primary: #007AFF; --danger: #FF3B30; --success: #34C759; }
-        body { font-family: -apple-system, sans-serif; background: #000; color: white; margin: 0; display: flex; flex-direction: column; align-items: center; overflow-x: hidden; }
+        :root { --primary: #00e5ff; /* 青色用於骨架 */ --secondary: #ffeb3b; /* 黃色用於關節 */ --danger: #FF3B30; --success: #34C759; }
+        body { font-family: -apple-system, monospace, sans-serif; background: #000; color: white; margin: 0; display: flex; flex-direction: column; align-items: center; overflow-x: hidden; }
         
         #video-container { position: relative; width: 100vw; max-width: 500px; aspect-ratio: 3/4; background: #111; }
-        video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+        video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); opacity: 0.6; /* 讓影片稍微暗一點，突出骨架 */ }
         canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; transform: scaleX(-1); }
 
         .control-panel { 
-            width: 100%; max-width: 500px; background: #1c1c1e; border-radius: 25px 25px 0 0; 
-            padding: 25px; box-sizing: border-box; margin-top: -20px; z-index: 10;
+            width: 100%; max-width: 500px; background: rgba(28, 28, 30, 0.9); backdrop-filter: blur(10px);
+            border-radius: 25px 25px 0 0; padding: 20px; box-sizing: border-box; margin-top: -25px; z-index: 10;
             box-shadow: 0 -10px 30px rgba(0,0,0,0.5);
         }
 
-        .stat-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .stat-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
         .status-tag { padding: 4px 12px; border-radius: 10px; font-size: 0.8rem; background: #3a3a3c; }
-        .is-bad { color: var(--danger); font-weight: bold; }
+        .is-bad { color: var(--danger); font-weight: bold; text-shadow: 0 0 10px rgba(255, 59, 48, 0.5); }
 
-        .slider-group { margin-bottom: 20px; }
-        .slider-header { display: flex; justify-content: space-between; font-size: 0.9rem; color: #8e8e93; margin-bottom: 8px; }
+        .slider-group { margin-bottom: 15px; }
+        .slider-header { display: flex; justify-content: space-between; font-size: 0.85rem; color: #aaa; margin-bottom: 5px; }
         .slider-header span { color: var(--primary); font-weight: bold; }
-        
-        input[type=range] { width: 100%; height: 6px; background: #3a3a3c; border-radius: 5px; accent-color: var(--primary); outline: none; }
+        input[type=range] { width: 100%; height: 4px; background: #555; border-radius: 2px; accent-color: var(--success); outline: none; }
+        .live-val { font-size: 0.75rem; color: #777; text-align: right; }
         
         .btn-group { display: flex; gap: 10px; margin-top: 10px; }
-        button { flex: 1; padding: 16px; border-radius: 15px; border: none; font-weight: bold; font-size: 1rem; cursor: pointer; transition: 0.2s; }
-        #startBtn { background: var(--primary); color: white; }
+        button { flex: 1; padding: 14px; border-radius: 12px; border: none; font-weight: bold; font-size: 1rem; cursor: pointer; transition: 0.2s; }
+        #startBtn { background: var(--success); color: white; }
         #caliBtn { background: #fff; color: #000; display: none; }
-        button:active { opacity: 0.7; }
-
-        /* 即時數值顯示 */
-        .live-val { font-family: monospace; font-size: 0.8rem; color: #666; margin-top: 4px; }
     </style>
 </head>
 <body>
@@ -57,26 +53,26 @@
         </div>
 
         <div class="slider-group">
-            <div class="slider-header">駝背折角閾值 (越小越嚴): <span id="v_angle">165</span>°</div>
-            <input type="range" id="input_angle" min="130" max="175" value="165">
-            <div class="live-val">目前即時角度: <span id="cur_angle">0</span>°</div>
+            <div class="slider-header">A. 駝背折角閾值: <span id="v_angle">165</span>°</div>
+            <input type="range" id="input_angle" min="140" max="175" value="165">
+            <div class="live-val">即時: <span id="cur_angle" style="color:var(--primary)">0</span>°</div>
         </div>
 
         <div class="slider-group">
-            <div class="slider-header">脊椎縮短感應 (越小越敏): <span id="v_slump">15</span>%</div>
-            <input type="range" id="input_slump" min="5" max="40" value="15">
-            <div class="live-val">目前壓縮率: <span id="cur_slump">0</span>%</div>
+            <div class="slider-header">B. 脊椎壓縮感應: <span id="v_slump">15</span>%</div>
+            <input type="range" id="input_slump" min="5" max="35" value="15">
+            <div class="live-val">即時: <span id="cur_slump" style="color:var(--primary)">0</span>%</div>
         </div>
 
         <div class="slider-group">
-            <div class="slider-header">重心前傾敏感度: <span id="v_lean">30</span></div>
+            <div class="slider-header">C. 重心前傾敏感度: <span id="v_lean">30</span>px</div>
             <input type="range" id="input_lean" min="10" max="100" value="30">
-            <div class="live-val">目前前傾位移: <span id="cur_lean">0</span>px</div>
+            <div class="live-val">即時: <span id="cur_lean" style="color:var(--primary)">0</span>px</div>
         </div>
 
         <div class="btn-group">
-            <button id="startBtn">啟動鏡頭</button>
-            <button id="caliBtn">校準理想姿勢</button>
+            <button id="startBtn">開啟相機 & 骨架</button>
+            <button id="caliBtn">校準標準姿勢</button>
         </div>
     </div>
 
@@ -90,10 +86,23 @@
         let config = { angle: 165, slump: 0.15, lean: 30 };
         let badFrames = 0;
 
-        // UI 事件綁定
-        document.getElementById('input_angle').oninput = function() { config.angle = parseInt(this.value); document.getElementById('v_angle').innerText = this.value; };
-        document.getElementById('input_slump').oninput = function() { config.slump = this.value / 100; document.getElementById('v_slump').innerText = this.value; };
-        document.getElementById('input_lean').oninput = function() { config.lean = parseInt(this.value); document.getElementById('v_lean').innerText = this.value; };
+        // 定義骨架連接對 (用於繪製)
+        const skeletonConnections = [
+            ['nose', 'left_eye'], ['nose', 'right_eye'], ['left_eye', 'left_ear'], ['right_eye', 'right_ear'], // 頭部
+            ['left_shoulder', 'right_shoulder'], // 肩膀水平
+            ['left_shoulder', 'left_elbow'], ['left_elbow', 'left_wrist'], // 左手
+            ['right_shoulder', 'right_elbow'], ['right_elbow', 'right_wrist'], // 右手
+            ['left_shoulder', 'left_hip'], ['right_shoulder', 'right_hip'], // 軀幹兩側
+            ['left_hip', 'right_hip'] // 髖部水平
+        ];
+
+        // UI 事件
+        ['angle', 'slump', 'lean'].forEach(key => {
+            document.getElementById(`input_${key}`).oninput = function() { 
+                config[key] = key === 'slump' ? this.value / 100 : parseInt(this.value);
+                document.getElementById(`v_${key}`).innerText = this.value;
+            };
+        });
 
         async function init() {
             detector = await poseDetection.createDetector(
@@ -104,23 +113,25 @@
         }
 
         document.getElementById('startBtn').onclick = async () => {
-            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
-            video.srcObject = stream;
-            await video.play();
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
-            document.getElementById('startBtn').style.display = 'none';
-            document.getElementById('caliBtn').style.display = 'block';
-            if (Notification.permission !== "granted") Notification.requestPermission();
-            detect();
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } } });
+                video.srcObject = stream;
+                await video.play();
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                document.getElementById('startBtn').style.display = 'none';
+                document.getElementById('caliBtn').style.display = 'block';
+                if (Notification.permission !== "granted") Notification.requestPermission();
+                detect();
+            } catch(e) { alert("請允許相機權限"); }
         };
 
         document.getElementById('caliBtn').onclick = () => {
-            baseline.spineLen = -1; // 下一幀進行校準採樣
+            baseline.spineLen = -1; 
             document.getElementById('status-tag').innerText = "已更新基準值";
         };
 
-        // 計算三點構成的角度
+        // 計算三點角度
         function getAngle(p1, p2, p3) {
             const a = Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2);
             const b = Math.pow(p2.x - p3.x, 2) + Math.pow(p2.y - p3.y, 2);
@@ -133,21 +144,25 @@
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 
             if (poses.length > 0) {
-                const kp = poses[0].keypoints.reduce((acc, k) => ({ ...acc, [k.name]: k }), {});
+                const kpMap = poses[0].keypoints.reduce((acc, k) => ({ ...acc, [k.name]: k }), {});
                 
-                // 關鍵點計算
-                const nose = kp.nose;
-                const midShoulder = { x: (kp.left_shoulder.x + kp.right_shoulder.x) / 2, y: (kp.left_shoulder.y + kp.right_shoulder.y) / 2 };
-                const midHip = { x: (kp.left_hip.x + kp.right_hip.x) / 2, y: (kp.left_hip.y + kp.right_hip.y) / 2 };
+                // 繪製完整基礎骨架
+                drawFullSkeleton(kpMap);
 
-                // 1. 脊椎角度 (Nose-Shoulder-Hip)
+                // 計算核心點
+                const nose = kpMap.nose;
+                const midShoulder = { x: (kpMap.left_shoulder.x + kpMap.right_shoulder.x) / 2, y: (kpMap.left_shoulder.y + kpMap.right_shoulder.y) / 2 };
+                const midHip = { x: (kpMap.left_hip.x + kpMap.right_hip.x) / 2, y: (kpMap.left_hip.y + kpMap.right_hip.y) / 2 };
+
+                // 繪製計算用的虛擬中線 (疊加在最上層)
+                drawVirtualCenterLines(midShoulder, midHip, nose);
+
+                // 計算數值
                 const currentAngle = getAngle(nose, midShoulder, midHip);
-                // 2. 脊椎長度
                 const currentSpineLen = Math.sqrt(Math.pow(midShoulder.x - midHip.x, 2) + Math.pow(midShoulder.y - midHip.y, 2));
-                // 3. 重心位移
                 const currentLean = Math.abs(nose.x - midHip.x);
 
-                // 更新畫面數值
+                // 更新 UI
                 document.getElementById('cur_angle').innerText = Math.round(currentAngle);
                 document.getElementById('cur_lean').innerText = Math.round(currentLean);
 
@@ -158,22 +173,19 @@
                     baseline.spineAngle = currentAngle;
                 }
 
-                // 繪製骨架視覺化
-                drawDebug(midShoulder, midHip, nose);
-
+                // 判定邏輯
                 if (baseline.spineLen > 0) {
                     const slumpRate = (baseline.spineLen - currentSpineLen) / baseline.spineLen;
                     document.getElementById('cur_slump').innerText = Math.round(slumpRate * 100);
 
-                    // 嚴謹判定邏輯 (三個條件任一觸發)
                     const isBending = currentAngle < config.angle;
                     const isSlumping = slumpRate > config.slump;
                     const isLeaning = (currentLean - baseline.headOffset) > config.lean;
 
                     if (isBending || isSlumping || isLeaning) {
                         badFrames++;
-                        if (badFrames > 10) {
-                            updateStatus(true, isBending ? "⚠️ 脊椎過度彎曲" : (isSlumping ? "⚠️ 身體塌陷" : "⚠️ 重心前傾"));
+                        if (badFrames > 12) {
+                            updateStatus(true, isBending ? "⚠️ 脊椎彎曲" : (isSlumping ? "⚠️ 身體塌陷" : "⚠️ 重心前傾"));
                         }
                     } else {
                         badFrames = 0;
@@ -184,28 +196,49 @@
             requestAnimationFrame(detect);
         }
 
-        function drawDebug(ms, mh, n) {
-            ctx.strokeStyle = "#34C759";
-            ctx.lineWidth = 6;
+        // 新增：繪製完整骨架函數
+        function drawFullSkeleton(kpMap) {
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = 'var(--primary)'; // 青色線條
+            ctx.fillStyle = 'var(--secondary)'; // 黃色關節點
+
+            // 畫線
+            skeletonConnections.forEach(([p1, p2]) => {
+                if (kpMap[p1] && kpMap[p2] && kpMap[p1].score > 0.4 && kpMap[p2].score > 0.4) {
+                    ctx.beginPath();
+                    ctx.moveTo(kpMap[p1].x, kpMap[p1].y);
+                    ctx.lineTo(kpMap[p2].x, kpMap[p2].y);
+                    ctx.stroke();
+                }
+            });
+
+            // 畫點
+            Object.values(kpMap).forEach(kp => {
+                if (kp.score > 0.4) {
+                    ctx.beginPath();
+                    ctx.arc(kp.x, kp.y, 4, 0, 2 * Math.PI);
+                    ctx.fill();
+                }
+            });
+        }
+
+        // 繪製虛擬計算中線
+        function drawVirtualCenterLines(ms, mh, n) {
+            ctx.lineWidth = 5;
             ctx.lineCap = "round";
-            // 畫脊椎
-            ctx.beginPath();
-            ctx.moveTo(ms.x, ms.y);
-            ctx.lineTo(mh.x, mh.y);
-            ctx.stroke();
-            // 畫頭頸
-            ctx.beginPath();
-            ctx.strokeStyle = "#007AFF";
-            ctx.moveTo(ms.x, ms.y);
-            ctx.lineTo(n.x, n.y);
-            ctx.stroke();
+            // 脊椎中線 (綠色)
+            ctx.beginPath(); ctx.strokeStyle = "#34C759";
+            ctx.moveTo(ms.x, ms.y); ctx.lineTo(mh.x, mh.y); ctx.stroke();
+            // 頭頸連線 (紅色，表示關鍵觀察區)
+            ctx.beginPath(); ctx.strokeStyle = "#FF3B30";
+            ctx.moveTo(ms.x, ms.y); ctx.lineTo(n.x, n.y); ctx.stroke();
         }
 
         function updateStatus(isBad, msg) {
             const msgEl = document.getElementById('pose-msg');
             msgEl.innerText = msg;
             msgEl.className = isBad ? "is-bad" : "";
-            if (isBad && badFrames === 11) {
+            if (isBad && badFrames === 13) {
                 if (Notification.permission === "granted") new Notification("姿勢提醒", { body: msg });
                 if (navigator.vibrate) navigator.vibrate(200);
             }
