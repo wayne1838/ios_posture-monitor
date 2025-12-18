@@ -2,150 +2,184 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI 坐姿監測助手</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Pro AI 姿勢監測儀</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection"></script>
     
     <style>
-        body { font-family: -apple-system, sans-serif; display: flex; flex-direction: column; align-items: center; background: #f0f2f5; margin: 0; padding: 20px; }
-        #container { position: relative; width: 100%; max-width: 500px; border-radius: 15px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.1); background: #000; }
-        video { width: 100%; height: auto; transform: scaleX(-1); }
+        :root { --primary: #007AFF; --danger: #FF3B30; --success: #34C759; }
+        body { font-family: -apple-system, system-ui, sans-serif; background: #1c1c1e; color: white; margin: 0; display: flex; flex-direction: column; align-items: center; }
+        
+        #video-container { position: relative; width: 95vw; max-width: 500px; aspect-ratio: 3/4; background: #000; border-radius: 20px; overflow: hidden; margin-top: 15px; border: 2px solid #333; }
+        video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
         canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; transform: scaleX(-1); }
-        .controls { margin-top: 20px; display: flex; gap: 10px; }
-        button { padding: 12px 24px; border: none; border-radius: 25px; font-weight: bold; cursor: pointer; transition: 0.3s; }
-        #startBtn { background: #007aff; color: white; }
-        #caliBtn { background: #34c759; color: white; display: none; }
-        #status { margin-top: 15px; font-size: 1.2rem; font-weight: bold; color: #333; }
-        .bad-posture { background: #ff3b30 !important; color: white !important; }
-        #info { font-size: 0.8rem; color: #666; margin-top: 10px; text-align: center; }
+
+        .status-bar { width: 95vw; max-width: 500px; padding: 15px; border-radius: 15px; margin-top: 15px; text-align: center; font-weight: bold; font-size: 1.1rem; transition: 0.3s; background: #2c2c2e; }
+        .is-bad { background: var(--danger); animation: shake 0.5s infinite; }
+        
+        .settings-panel { width: 95vw; max-width: 500px; background: #2c2c2e; border-radius: 15px; padding: 15px; margin-top: 15px; box-sizing: border-box; }
+        .setting-item { margin-bottom: 15px; }
+        .setting-item label { display: block; font-size: 0.9rem; color: #aeaeb2; margin-bottom: 5px; }
+        input[type=range] { width: 100%; margin: 10px 0; }
+        
+        .btn-group { display: flex; gap: 10px; margin-top: 15px; }
+        button { flex: 1; padding: 12px; border-radius: 12px; border: none; font-weight: 600; font-size: 1rem; cursor: pointer; }
+        #startBtn { background: var(--primary); color: white; }
+        #caliBtn { background: var(--success); color: white; display: none; }
+
+        @keyframes shake { 0% { transform: translateX(0); } 25% { transform: translateX(5px); } 50% { transform: translateX(-5px); } 75% { transform: translateX(5px); } 100% { transform: translateX(0); } }
     </style>
 </head>
 <body>
 
-    <h2>坐姿監測助手 (RD版)</h2>
-    <div id="container">
+    <div id="video-container">
         <video id="video" playsinline></video>
         <canvas id="canvas"></canvas>
     </div>
 
-    <div id="status">等待啟動...</div>
+    <div id="status" class="status-bar">模型載入中...</div>
 
-    <div class="controls">
-        <button id="startBtn">啟動鏡頭</button>
-        <button id="caliBtn">校準良好坐姿</button>
+    <div class="settings-panel">
+        <div class="setting-item">
+            <label>頸部前傾閾值 (角度): <span id="angleVal">25</span>°</label>
+            <input type="range" id="angleThreshold" min="10" max="60" value="25">
+        </div>
+        <div class="setting-item">
+            <label>脊椎塌陷感應度: <span id="slumpVal">0.4</span></label>
+            <input type="range" id="slumpThreshold" min="0.1" max="0.8" step="0.05" value="0.4">
+        </div>
+        <div class="setting-item">
+            <label>判定延遲 (格數): <span id="frameVal">10</span></label>
+            <input type="range" id="frameDelay" min="1" max="30" value="10">
+        </div>
+        
+        <div class="btn-group">
+            <button id="startBtn">啟動 AI 監測</button>
+            <button id="caliBtn">校準良好姿勢</button>
+        </div>
     </div>
-
-    <div id="info">提示：iOS 使用者請點擊「加入主畫面」以獲得完整通知權限。<br>需確保鏡頭能拍到頭部與肩膀。</div>
 
     <script>
         const video = document.getElementById('video');
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d');
-        const startBtn = document.getElementById('startBtn');
-        const caliBtn = document.getElementById('caliBtn');
         const statusDiv = document.getElementById('status');
-
+        
         let detector;
-        let baselineY = null; // 儲存正確坐姿時鼻子的 Y 座標
-        let isBadPosture = false;
-        let lastNotifyTime = 0;
+        let config = {
+            angleLimit: 25,
+            slumpLimit: 0.4,
+            delay: 10
+        };
+        
+        let baseline = { neckAngle: null, slumpRatio: null };
+        let badFrameCount = 0;
 
-        // 初始化模型
+        // 滑桿事件監聽
+        document.getElementById('angleThreshold').oninput = function() { config.angleLimit = this.value; document.getElementById('angleVal').innerText = this.value; };
+        document.getElementById('slumpThreshold').oninput = function() { config.slumpLimit = this.value; document.getElementById('slumpVal').innerText = this.value; };
+        document.getElementById('frameDelay').oninput = function() { config.delay = this.value; document.getElementById('frameVal').innerText = this.value; };
+
         async function init() {
-            statusDiv.innerText = "模型載入中...";
             detector = await poseDetection.createDetector(
                 poseDetection.SupportedModels.MoveNet,
                 { modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING }
             );
-            statusDiv.innerText = "準備就緒";
+            statusDiv.innerText = "準備就緒，請啟動鏡頭";
         }
 
-        // 啟動相機
-        startBtn.onclick = async () => {
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({ 
-                    video: { facingMode: 'user' }, 
-                    audio: false 
-                });
-                video.srcObject = stream;
-                await video.play();
-                
-                // 設定 Canvas 大小與 Video 一致
-                canvas.width = video.videoWidth;
-                canvas.height = video.videoHeight;
-                
-                startBtn.style.display = 'none';
-                caliBtn.style.display = 'block';
-                statusDiv.innerText = "請坐正後點擊『校準』";
-                
-                // 請求通知權限
-                if (Notification.permission !== "granted") {
-                    Notification.requestPermission();
-                }
-
-                detect();
-            } catch (err) {
-                alert("無法存取鏡頭: " + err);
-            }
+        document.getElementById('startBtn').onclick = async () => {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
+            video.srcObject = stream;
+            await video.play();
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            document.getElementById('startBtn').style.display = 'none';
+            document.getElementById('caliBtn').style.display = 'block';
+            statusDiv.innerText = "請坐正後點擊『校準』";
+            if (Notification.permission !== "granted") Notification.requestPermission();
+            detect();
         };
 
-        // 校準基準點
-        caliBtn.onclick = () => {
-            baselineY = currentNoseY;
-            statusDiv.innerText = "校準成功！監控中...";
+        document.getElementById('caliBtn').onclick = () => {
+            // 校準將在下一幀自動執行一捕捉
+            baseline.neckAngle = -1; // 標記為待捕捉
+            statusDiv.innerText = "正在自動校準基準值...";
         };
-
-        let currentNoseY = 0;
 
         async function detect() {
             const poses = await detector.estimatePoses(video);
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 
             if (poses.length > 0) {
-                const nose = poses[0].keypoints.find(k => k.name === 'nose');
-                const leftEar = poses[0].keypoints.find(k => k.name === 'left_ear');
-                const rightEar = poses[0].keypoints.find(k => k.name === 'right_ear');
+                const kp = poses[0].keypoints.reduce((acc, k) => ({ ...acc, [k.name]: k }), {});
+                
+                // 核心關鍵點：耳朵與肩膀
+                const ear = kp.left_ear.score > 0.5 ? kp.left_ear : kp.right_ear;
+                const shoulder = kp.left_shoulder.score > 0.5 ? kp.left_shoulder : kp.right_shoulder;
+                const shoulderWidth = Math.abs(kp.left_shoulder.x - kp.right_shoulder.x);
 
-                if (nose && nose.score > 0.5) {
-                    currentNoseY = nose.y;
+                if (ear.score > 0.5 && shoulder.score > 0.5) {
+                    // 1. 計算頸部角度 (與垂直線夾角)
+                    const dx = Math.abs(ear.x - shoulder.x);
+                    const dy = Math.abs(ear.y - shoulder.y);
+                    const neckAngle = Math.atan2(dx, dy) * (180 / Math.PI);
 
-                    // 繪製視覺反饋
-                    ctx.beginPath();
-                    ctx.arc(nose.x, nose.y, 10, 0, 2 * Math.PI);
-                    ctx.fillStyle = isBadPosture ? "red" : "#34c759";
-                    ctx.fill();
+                    // 2. 計算脊椎比例 (耳朵到肩膀距離 / 肩膀寬度) -> 標準化
+                    const slumpRatio = dy / shoulderWidth;
 
-                    // 判斷邏輯：如果當前鼻子位置低於基準值（threshold 為 40 像素，可調）
-                    if (baselineY && (currentNoseY > baselineY + 45)) {
-                        if (!isBadPosture) {
-                            triggerWarning();
+                    // 繪製骨架視覺化
+                    drawSkeleton(ctx, ear, shoulder);
+
+                    // 校準邏輯
+                    if (baseline.neckAngle === -1) {
+                        baseline.neckAngle = neckAngle;
+                        baseline.slumpRatio = slumpRatio;
+                        statusDiv.innerText = "校準完成！監控中...";
+                    }
+
+                    // 判斷邏輯
+                    const isLeaningForward = neckAngle > config.angleLimit;
+                    const isSlumping = baseline.slumpRatio ? (slumpRatio < baseline.slumpRatio * (1 - config.slumpLimit)) : false;
+
+                    if (isLeaningForward || isSlumping) {
+                        badFrameCount++;
+                        if (badFrameCount > config.delay) {
+                            updateUI(true, isLeaningForward ? "⚠️ 偵測到烏龜頸" : "⚠️ 偵測到脊椎塌陷");
                         }
-                        isBadPosture = true;
-                        statusDiv.innerText = "⚠️ 偵測到低頭/駝背！";
-                        document.body.classList.add('bad-posture');
-                    } else if (baselineY) {
-                        isBadPosture = false;
-                        statusDiv.innerText = "✅ 姿勢良好";
-                        document.body.classList.remove('bad-posture');
+                    } else {
+                        badFrameCount = 0;
+                        updateUI(false, "✅ 姿勢良好");
                     }
                 }
             }
             requestAnimationFrame(detect);
         }
 
-        function triggerWarning() {
-            const now = Date.now();
-            // 避免通知太頻繁 (每 10 秒最多一次)
-            if (now - lastNotifyTime > 10000) {
-                if (Notification.permission === "granted") {
-                    new Notification("姿勢警告", { body: "請抬起頭，不要駝背！" });
+        function drawSkeleton(ctx, ear, shoulder) {
+            ctx.beginPath();
+            ctx.moveTo(ear.x, ear.y);
+            ctx.lineTo(shoulder.x, shoulder.y);
+            ctx.strokeStyle = "white";
+            ctx.lineWidth = 4;
+            ctx.stroke();
+            ctx.fillStyle = "cyan";
+            ctx.fill();
+        }
+
+        function updateUI(isBad, msg) {
+            statusDiv.innerText = msg;
+            if (isBad) {
+                statusDiv.classList.add('is-bad');
+                if (badFrameCount === config.delay + 1) { // 剛觸發時通知
+                    if (Notification.permission === "granted") new Notification("姿勢提醒", { body: msg });
+                    if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
                 }
-                // 震動回饋 (部分瀏覽器支援)
-                if (navigator.vibrate) navigator.vibrate(200);
-                lastNotifyTime = now;
+            } else {
+                statusDiv.classList.remove('is-bad');
             }
         }
 
