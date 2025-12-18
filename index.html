@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 坐姿監測助手</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection"></script>
+    
+    <style>
+        body { font-family: -apple-system, sans-serif; display: flex; flex-direction: column; align-items: center; background: #f0f2f5; margin: 0; padding: 20px; }
+        #container { position: relative; width: 100%; max-width: 500px; border-radius: 15px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.1); background: #000; }
+        video { width: 100%; height: auto; transform: scaleX(-1); }
+        canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; transform: scaleX(-1); }
+        .controls { margin-top: 20px; display: flex; gap: 10px; }
+        button { padding: 12px 24px; border: none; border-radius: 25px; font-weight: bold; cursor: pointer; transition: 0.3s; }
+        #startBtn { background: #007aff; color: white; }
+        #caliBtn { background: #34c759; color: white; display: none; }
+        #status { margin-top: 15px; font-size: 1.2rem; font-weight: bold; color: #333; }
+        .bad-posture { background: #ff3b30 !important; color: white !important; }
+        #info { font-size: 0.8rem; color: #666; margin-top: 10px; text-align: center; }
+    </style>
+</head>
+<body>
+
+    <h2>坐姿監測助手 (RD版)</h2>
+    <div id="container">
+        <video id="video" playsinline></video>
+        <canvas id="canvas"></canvas>
+    </div>
+
+    <div id="status">等待啟動...</div>
+
+    <div class="controls">
+        <button id="startBtn">啟動鏡頭</button>
+        <button id="caliBtn">校準良好坐姿</button>
+    </div>
+
+    <div id="info">提示：iOS 使用者請點擊「加入主畫面」以獲得完整通知權限。<br>需確保鏡頭能拍到頭部與肩膀。</div>
+
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const startBtn = document.getElementById('startBtn');
+        const caliBtn = document.getElementById('caliBtn');
+        const statusDiv = document.getElementById('status');
+
+        let detector;
+        let baselineY = null; // 儲存正確坐姿時鼻子的 Y 座標
+        let isBadPosture = false;
+        let lastNotifyTime = 0;
+
+        // 初始化模型
+        async function init() {
+            statusDiv.innerText = "模型載入中...";
+            detector = await poseDetection.createDetector(
+                poseDetection.SupportedModels.MoveNet,
+                { modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING }
+            );
+            statusDiv.innerText = "準備就緒";
+        }
+
+        // 啟動相機
+        startBtn.onclick = async () => {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: 'user' }, 
+                    audio: false 
+                });
+                video.srcObject = stream;
+                await video.play();
+                
+                // 設定 Canvas 大小與 Video 一致
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                
+                startBtn.style.display = 'none';
+                caliBtn.style.display = 'block';
+                statusDiv.innerText = "請坐正後點擊『校準』";
+                
+                // 請求通知權限
+                if (Notification.permission !== "granted") {
+                    Notification.requestPermission();
+                }
+
+                detect();
+            } catch (err) {
+                alert("無法存取鏡頭: " + err);
+            }
+        };
+
+        // 校準基準點
+        caliBtn.onclick = () => {
+            baselineY = currentNoseY;
+            statusDiv.innerText = "校準成功！監控中...";
+        };
+
+        let currentNoseY = 0;
+
+        async function detect() {
+            const poses = await detector.estimatePoses(video);
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            if (poses.length > 0) {
+                const nose = poses[0].keypoints.find(k => k.name === 'nose');
+                const leftEar = poses[0].keypoints.find(k => k.name === 'left_ear');
+                const rightEar = poses[0].keypoints.find(k => k.name === 'right_ear');
+
+                if (nose && nose.score > 0.5) {
+                    currentNoseY = nose.y;
+
+                    // 繪製視覺反饋
+                    ctx.beginPath();
+                    ctx.arc(nose.x, nose.y, 10, 0, 2 * Math.PI);
+                    ctx.fillStyle = isBadPosture ? "red" : "#34c759";
+                    ctx.fill();
+
+                    // 判斷邏輯：如果當前鼻子位置低於基準值（threshold 為 40 像素，可調）
+                    if (baselineY && (currentNoseY > baselineY + 45)) {
+                        if (!isBadPosture) {
+                            triggerWarning();
+                        }
+                        isBadPosture = true;
+                        statusDiv.innerText = "⚠️ 偵測到低頭/駝背！";
+                        document.body.classList.add('bad-posture');
+                    } else if (baselineY) {
+                        isBadPosture = false;
+                        statusDiv.innerText = "✅ 姿勢良好";
+                        document.body.classList.remove('bad-posture');
+                    }
+                }
+            }
+            requestAnimationFrame(detect);
+        }
+
+        function triggerWarning() {
+            const now = Date.now();
+            // 避免通知太頻繁 (每 10 秒最多一次)
+            if (now - lastNotifyTime > 10000) {
+                if (Notification.permission === "granted") {
+                    new Notification("姿勢警告", { body: "請抬起頭，不要駝背！" });
+                }
+                // 震動回饋 (部分瀏覽器支援)
+                if (navigator.vibrate) navigator.vibrate(200);
+                lastNotifyTime = now;
+            }
+        }
+
+        init();
+    </script>
+</body>
+</html>
